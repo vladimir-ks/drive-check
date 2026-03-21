@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeLifeScore, checkRequirements, DEFAULT_CONFIG, isTokenExpired, setNestedValue, getNestedValue } from '../../tools/drive-buy.js';
+import { computeLifeScore, checkRequirements, DEFAULT_CONFIG, isTokenExpired, setNestedValue, getNestedValue } from '../../tools/lib/scoring.js';
 
 // ============================================================================
 // computeLifeScore
