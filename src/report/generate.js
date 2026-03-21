@@ -5,6 +5,32 @@
 
 import { generateIntegrity } from './integrity.js';
 
+/**
+ * Multi-drive report (v1.2) — wraps multiple drives in one report.
+ */
+export function generateMultiReport(parsedDrives, token, toolVersion, rawSmartJsons = []) {
+  const generated_at = new Date().toISOString();
+
+  const drives = parsedDrives.map((parsed, i) => {
+    const { drive, health, selfTests, errorCount } = parsed;
+    const verdict = computeVerdict(health, errorCount);
+    const entry = { drive, health, self_tests: selfTests, error_log_count: errorCount, verdict };
+    if (rawSmartJsons[i]) {
+      entry.integrity = generateIntegrity(rawSmartJsons[i], parsed, generated_at);
+    }
+    return entry;
+  });
+
+  return {
+    version: '1.2',
+    token,
+    generated_at,
+    tool_version: toolVersion,
+    drive_count: drives.length,
+    drives,
+  };
+}
+
 export function generateReport(parsed, token, toolVersion, rawSmartctlJson = null) {
   const { drive, health, selfTests, errorCount, isNvme } = parsed;
   const verdict = computeVerdict(health, errorCount);

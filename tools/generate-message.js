@@ -19,14 +19,37 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline';
+import { homedir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const LEDGER_PATH = join(__dirname, '..', '.drive-checks.json');
+
+// Data dir: ~/.drive-buy/ (survives repo re-clones)
+const DATA_DIR = join(homedir(), '.drive-buy');
+mkdirSync(DATA_DIR, { recursive: true });
+const LEDGER_PATH = join(DATA_DIR, 'ledger.json');
 
 // Parse args
 const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
 const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
-const lang = flags.includes('--es') ? 'es' : 'en';
+
+// Language: explicit flag > URL detection > system locale > default en
+function autoDetectLang(url) {
+  if (flags.includes('--es')) return 'es';
+  if (flags.includes('--de')) return 'de';
+  if (flags.includes('--fr')) return 'fr';
+  if (flags.includes('--en')) return 'en';
+  // Detect from URL
+  if (url && /wallapop|milanuncios/i.test(url)) return 'es';
+  if (url && /kleinanzeigen/i.test(url)) return 'de';
+  if (url && /leboncoin/i.test(url)) return 'fr';
+  // System locale
+  const envLang = (process.env.LANG || process.env.LC_ALL || '').split(/[-_.]/)[0].toLowerCase();
+  if (['es', 'ca', 'gl'].includes(envLang)) return 'es';
+  if (envLang === 'de') return 'de';
+  if (envLang === 'fr') return 'fr';
+  return 'en';
+}
+
 const shouldCopy = flags.includes('--copy') || flags.includes('--go');
 const interactive = flags.includes('--go') || args.length === 0;
 
@@ -54,6 +77,9 @@ async function main() {
   const token = `dc-${id}-t${ts}`;
   const ntfyUrl = `https://ntfy.sh/${token}`;
   const expires = new Date((Math.floor(Date.now() / 1000) + 7 * 24 * 3600) * 1000);
+
+  // Detect language (after URL is known)
+  const lang = autoDetectLang(listingUrl);
 
   // Build message
   const message = buildMessage(lang, token, sellerName);

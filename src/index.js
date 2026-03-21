@@ -1,6 +1,6 @@
 /**
  * Main orchestrator — ties all modules together.
- * This is the full CLI flow from start to finish.
+ * Supports multi-drive selection via interactive TUI.
  */
 
 import { readFileSync } from 'node:fs';
@@ -13,14 +13,15 @@ import { getInstallGuide } from './smart/install-guide.js';
 import { scanDrives, enrichDrive } from './smart/scan.js';
 import { collectSmart } from './smart/collect.js';
 import { parseSmartctl } from './smart/parse.js';
-import { generateReport } from './report/generate.js';
+import { generateReport, generateMultiReport } from './report/generate.js';
 import { signReport } from './report/sign.js';
 import { formatReport } from './report/format.js';
 import { sendToNtfy } from './delivery/ntfy.js';
 import { saveLocalReport } from './delivery/fallback.js';
-import { banner, transparencyPledge, driveList, color, spinner } from './cli/display.js';
-import { confirm, selectDrive, closeRL } from './cli/prompts.js';
+import { banner, transparencyPledge, color, spinner } from './cli/display.js';
+import { confirm as legacyConfirm, closeRL } from './cli/prompts.js';
 import { logCommand, logAction } from './security/audit-log.js';
+import { multiSelect, select, confirm as tuiConfirm } from './tui.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
@@ -41,9 +42,12 @@ const QUESTIONNAIRE = [
   { q: 'Why are you selling this drive?', options: ['Upgraded to larger/newer', 'System no longer needed', 'Clearing out unused equipment', 'Had some issues with it', 'Other'] },
 ];
 
+// Use TUI confirm when TTY is available, fall back to legacy readline
+const confirmFn = process.stdin.isTTY ? tuiConfirm : legacyConfirm;
+
 export async function run(token) {
   try {
-    // 1. Validate token (or allow no-token mode for self-test)
+    // 1. Validate token
     const selfTestMode = !token || token === '--self-test';
     let tokenResult;
     if (!selfTestMode) {
@@ -59,7 +63,7 @@ export async function run(token) {
     console.log(banner(pkg.version));
     if (!selfTestMode) {
       console.log(transparencyPledge());
-      const proceed = await confirm('Continue?');
+      const proceed = await confirmFn('Continue?');
       if (!proceed) {
         console.log('\nExited. No data was collected or sent.');
         closeRL();
@@ -79,7 +83,7 @@ export async function run(token) {
     }
     console.log(color.dim(`  Using: ${smartctl.path}`));
 
-    // 4. Scan drives (with permission detection)
+    // 4. Scan drives
     logCommand(smartctl.path, ['--scan', '-j']);
     let drives;
     try {
@@ -108,41 +112,77 @@ export async function run(token) {
     // 5. Enrich drive list with model/size
     const enrichSp = spinner('Identifying drives...');
     await Promise.all(drives.map(d => enrichDrive(smartctl.path, d)));
-    enrichSp.stop(color.green('+ Drives identified'));
+    enrichSp.stop(color.green(`+ Found ${drives.length} drive(s)`));
 
-    // 6. Select drive
-    console.log(driveList(drives));
-    const driveIdx = await selectDrive(drives);
-    const selectedDrive = drives[driveIdx];
-    console.log(color.dim(`  Selected: ${selectedDrive.path}${selectedDrive.model ? ' (' + selectedDrive.model + ')' : ''}`));
-
-    // 7. Collect SMART data
-    const sp = spinner('Reading drive health data...');
-    logCommand(smartctl.path, ['-j', '-a', selectedDrive.path]);
-    let rawSmart;
-    try {
-      rawSmart = await collectSmart(smartctl.path, selectedDrive.path);
-    } catch (err) {
-      sp.stop(color.red('x Failed'));
-      if (err.message === 'PERMISSION_DENIED') {
-        console.log(SUDO_MSG);
+    // 6. Select drives (multi-select for >1, auto-select for 1)
+    let selectedDrives;
+    if (drives.length === 1) {
+      selectedDrives = [drives[0]];
+      console.log(color.dim(`  Drive: ${drives[0].path} — ${drives[0].model || 'Unknown'}`));
+    } else {
+      const choices = drives.map(d => ({
+        label: `${d.path} — ${d.model || 'Unknown'} (${d.size || '?'})`,
+        value: d,
+      }));
+      selectedDrives = await multiSelect('Which drives are you selling?', choices, { preselectAll: false });
+      if (selectedDrives.length === 0) {
+        console.log('\n  No drives selected. Exiting.');
         closeRL();
-        process.exitCode = 1;
         return;
       }
-      throw err;
     }
-    sp.stop(color.green('+ SMART data collected'));
 
-    // 8. Parse + generate report
-    const parsed = parseSmartctl(rawSmart);
-    const report = generateReport(parsed, token ?? 'self-test', pkg.version, rawSmart);
-    const signature = signReport(report, token ?? 'self-test', pkg.version);
+    // 7. Collect SMART data for all selected drives
+    const results = [];
+    for (const drive of selectedDrives) {
+      const sp = spinner(`Checking ${drive.model || drive.path}...`);
+      logCommand(smartctl.path, ['-j', '-a', drive.path]);
+      try {
+        const rawSmart = await collectSmart(smartctl.path, drive.path);
+        sp.stop(color.green(`+ ${drive.model || drive.path}`));
+        const parsed = parseSmartctl(rawSmart);
+        results.push({ drive, rawSmart, parsed });
+      } catch (err) {
+        sp.stop(color.red(`x ${drive.model || drive.path} — failed`));
+        if (err.message === 'PERMISSION_DENIED') {
+          console.log(SUDO_MSG);
+          closeRL();
+          process.exitCode = 1;
+          return;
+        }
+        console.log(color.yellow(`  Skipped: ${err.message}`));
+      }
+    }
 
-    // 9. Show report to seller
-    console.log(formatReport(report));
+    if (results.length === 0) {
+      console.log(color.red('\nAll drive checks failed.'));
+      closeRL();
+      process.exitCode = 1;
+      return;
+    }
 
-    // Self-test mode: show report and exit
+    // 8. Generate report
+    let report, signature;
+    const effectiveToken = token ?? 'self-test';
+
+    if (results.length === 1) {
+      // Single drive → v1.1 (backward compat)
+      report = generateReport(results[0].parsed, effectiveToken, pkg.version, results[0].rawSmart);
+      signature = signReport(report, effectiveToken, pkg.version);
+      console.log(formatReport(report));
+    } else {
+      // Multiple drives → v1.2
+      report = generateMultiReport(
+        results.map(r => r.parsed),
+        effectiveToken,
+        pkg.version,
+        results.map(r => r.rawSmart),
+      );
+      signature = signReport(report, effectiveToken, pkg.version);
+      console.log(formatMultiSummary(report));
+    }
+
+    // 9. Self-test mode: show and exit
     if (selfTestMode) {
       console.log(color.dim('  (Self-test mode — no data sent)'));
       const localPath = saveLocalReport(report, signature, 'self-test');
@@ -151,16 +191,10 @@ export async function run(token) {
       return;
     }
 
-    // 10. Seller questionnaire
-    const answers = await runQuestionnaire();
-    if (answers) {
-      report.seller_responses = answers;
-    }
+    // 10. Send (default yes)
+    const shouldSend = await confirmFn('Send report to buyer?');
 
-    // 11. Ask to send
-    const shouldSend = await confirm('Send this report to buyer?');
-
-    // 12. Save local copy always
+    // 11. Save local copy always
     const localPath = saveLocalReport(report, signature, token);
     logAction(`Saved local copy: ${localPath}`);
 
@@ -168,19 +202,33 @@ export async function run(token) {
       const sendSp = spinner('Sending report...');
       try {
         await sendToNtfy(token, report, signature);
-        sendSp.stop(color.green('+ Report delivered successfully'));
+        sendSp.stop(color.green('+ Report sent'));
       } catch (err) {
         sendSp.stop(color.yellow('! Could not reach ntfy.sh'));
         console.log(color.yellow(`  Error: ${err.message}`));
-        console.log(`\n  The report was saved locally: ${color.bold(localPath)}`);
-        console.log('  You can send the file contents to the buyer manually.\n');
+        console.log(`\n  Report saved locally: ${color.bold(localPath)}`);
       }
     } else {
       console.log(`\n  Report saved locally: ${color.bold(localPath)}`);
-      console.log('  No data was sent to the buyer.\n');
     }
 
-    console.log(color.dim('Thank you!'));
+    // 12. Optional questionnaire (post-send, low friction)
+    if (process.stdin.isTTY) {
+      const wantQ = await confirmFn('Answer 5 quick questions about the drive?', false);
+      if (wantQ) {
+        const answers = await runQuestionnaire();
+        if (answers) {
+          report.seller_responses = answers;
+          saveLocalReport(report, signature, token);
+          // Re-send with answers (best-effort)
+          if (shouldSend) {
+            try { await sendToNtfy(token, report, signature); } catch { /* silent */ }
+          }
+        }
+      }
+    }
+
+    console.log(color.dim('\nDone!'));
   } catch (err) {
     console.error(color.red(`\nError: ${err.message}`));
     process.exitCode = 1;
@@ -189,31 +237,45 @@ export async function run(token) {
   }
 }
 
-async function runQuestionnaire() {
-  if (!process.stdin.isTTY) return null;
+// ============================================================================
+// Multi-drive summary table
+// ============================================================================
+function formatMultiSummary(report) {
+  let out = `\n${color.bold('=== DRIVE CHECK RESULTS ===')}\n\n`;
+  out += '  # | Model                  | Serial           |   Hours | Temp | Verdict\n';
+  out += '  ' + '-'.repeat(78) + '\n';
 
-  console.log(`\n${color.bold('A few quick questions about the drive\'s history:')}`);
-  console.log(color.dim('  (This helps the buyer assess the drive. Optional but appreciated.)\n'));
+  for (const [i, d] of report.drives.entries()) {
+    const model = (d.drive?.model || '?').padEnd(22).slice(0, 22);
+    const serial = (d.drive?.serial || '?').padEnd(16).slice(0, 16);
+    const hours = String(d.health?.power_on_hours || 0).padStart(7);
+    const temp = String(d.health?.temperature_c || '?').padStart(4);
+    const v = d.verdict?.overall;
+    const vc = v === 'HEALTHY' ? color.green(v) : v === 'WARNING' ? color.yellow(v) : color.red(v);
+    out += `  ${i + 1} | ${model} | ${serial} | ${hours} | ${temp} | ${vc}\n`;
 
-  const wantQ = await confirm('Answer 5 quick questions about the drive?');
-  if (!wantQ) return null;
-
-  const { createInterface } = await import('node:readline');
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const ask = (q) => new Promise(r => rl.question(q, r));
-
-  const answers = {};
-  for (const item of QUESTIONNAIRE) {
-    console.log(`\n  ${color.bold(item.q)}`);
-    item.options.forEach((opt, i) => {
-      console.log(`    ${color.cyan(String(i + 1))}. ${opt}`);
-    });
-    const raw = await ask('  Your answer (number or text): ');
-    const idx = parseInt(raw.trim(), 10) - 1;
-    answers[item.q] = (idx >= 0 && idx < item.options.length) ? item.options[idx] : raw.trim();
+    // Show reasons if not healthy
+    if (d.verdict?.reasons?.length > 0) {
+      for (const r of d.verdict.reasons) {
+        const icon = r.level === 'FAIL' ? color.red('x') : color.yellow('!');
+        out += `    ${icon} ${r.msg}\n`;
+      }
+    }
   }
 
-  rl.close();
-  console.log(color.dim('\n  Thank you for the answers!'));
+  out += `\n${color.bold('=== END OF RESULTS ===')}\n`;
+  return out;
+}
+
+// ============================================================================
+// Questionnaire — uses TUI select for each question
+// ============================================================================
+async function runQuestionnaire() {
+  const answers = {};
+  for (const item of QUESTIONNAIRE) {
+    const choices = item.options.map(opt => ({ label: opt, value: opt }));
+    answers[item.q] = await select(item.q, choices);
+  }
+  console.log(color.dim('\n  Thank you!'));
   return answers;
 }
