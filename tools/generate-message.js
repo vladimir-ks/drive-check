@@ -13,7 +13,8 @@
  *   alias drive-msg='node ~/homelab-setup/drive-check/tools/generate-message.js'
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -48,11 +49,11 @@ async function main() {
   const platform = detectPlatform(listingUrl);
 
   // Generate timed token
-  const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  const id = randomBytes(6).toString('hex');
   const ts = Math.floor(Date.now() / 1000).toString(16);
   const token = `dc-${id}-t${ts}`;
   const ntfyUrl = `https://ntfy.sh/${token}`;
-  const expires = new Date((Math.floor(Date.now() / 1000) + 48 * 3600) * 1000);
+  const expires = new Date((Math.floor(Date.now() / 1000) + 7 * 24 * 3600) * 1000);
 
   // Build message
   const message = buildMessage(lang, token, sellerName);
@@ -97,12 +98,14 @@ async function main() {
       console.log('✓ Opened ntfy topic in browser');
     } catch { /* ignore */ }
 
-    // Send activation ping
+    // Send activation ping (execFileSync to avoid shell injection)
     try {
       const title = sellerName
         ? `Waiting: ${sellerName} (${platform})`
         : `Waiting: ${platform} listing`;
-      execSync(`curl -s -o /dev/null -H "Title: ${title}" -H "Priority: 1" -H "Tags: hourglass" -d "${listingUrl || 'no URL'}" "${ntfyUrl}"`, { timeout: 5000 });
+      execFileSync('curl', ['-s', '-o', '/dev/null',
+        '-H', `Title: ${title}`, '-H', 'Priority: 1', '-H', 'Tags: hourglass',
+        '-d', listingUrl || 'no URL', ntfyUrl], { timeout: 5000, stdio: 'ignore' });
       console.log('✓ Topic activated');
     } catch { /* ignore */ }
   }
@@ -148,7 +151,8 @@ I'd also appreciate a quick health check if possible (2 minutes):
 Open-source, read-only, shows you everything before sending:
 https://github.com/vladimir-ks/drive-check
 
-A CrystalDiskInfo screenshot also works. Thanks!`,
+It requires Node.js (https://nodejs.org) — the tool will guide you
+through the rest. A CrystalDiskInfo screenshot also works. Thanks!`,
 
     es: `${greeting} Me interesa tu disco.
 
@@ -166,7 +170,8 @@ También agradecería un diagnóstico rápido si es posible (2 minutos):
 Código abierto, solo lectura, ves todo antes de enviar:
 https://github.com/vladimir-ks/drive-check
 
-Una captura de CrystalDiskInfo también sirve. ¡Gracias!`,
+Requiere Node.js (https://nodejs.org) — la herramienta te guía
+con el resto. Una captura de CrystalDiskInfo también sirve. ¡Gracias!`,
   };
 
   return messages[lang];

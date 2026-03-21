@@ -3,7 +3,7 @@
  * Key derived from token + tool version (no shared secret needed).
  */
 
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 
 export function signReport(report, token, toolVersion) {
   const key = deriveKey(token, toolVersion);
@@ -13,12 +13,17 @@ export function signReport(report, token, toolVersion) {
 
 export function verifySignature(report, signature, token, toolVersion) {
   const expected = signReport(report, token, toolVersion);
-  return expected === signature;
+  // Constant-time comparison to prevent timing side-channel
+  const a = Buffer.from(expected, 'hex');
+  const b = Buffer.from(signature, 'hex');
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 function deriveKey(token, toolVersion) {
+  // Pipe-separated to prevent concatenation ambiguity
   return createHash('sha256')
-    .update(token + toolVersion + 'drive-check')
+    .update(`${token}|${toolVersion}|drive-check`)
     .digest();
 }
 
