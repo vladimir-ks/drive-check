@@ -1,0 +1,119 @@
+{
+  "version": "1.1",
+  "token": "dc-4e4803aa70b6-t69be8a6c",
+  "generated_at": "2026-03-21T12:42:34.765Z",
+  "tool_version": "1.0.1",
+  "drive": {
+    "model": "WDC WD30EZRX-00MMMB0",
+    "model_family": "Western Digital Green",
+    "serial": "WD-WMAWZ0137443",
+    "firmware": "80.00A80",
+    "capacity_bytes": 3000592982016,
+    "capacity_human": "3.00 TB",
+    "rotation_rpm": null,
+    "form_factor": "",
+    "interface": "sat",
+    "protocol": "ATA"
+  },
+  "health": {
+    "type": "ata",
+    "smart_passed": true,
+    "power_on_hours": 48912,
+    "temperature_c": 30,
+    "reallocated_sectors": 0,
+    "reallocated_events": 0,
+    "pending_sectors": 1130,
+    "uncorrectable_sectors": 1052,
+    "crc_errors": 0,
+    "spin_retries": 0,
+    "reported_uncorrectable": 0,
+    "load_cycles": 111201,
+    "command_timeouts": 0,
+    "percentage_used": null,
+    "available_spare": null,
+    "available_spare_threshold": null,
+    "critical_warning": null,
+    "media_errors": null,
+    "unsafe_shutdowns": null
+  },
+  "self_tests": [
+    {
+      "type": "Extended offline",
+      "status": "Completed: read failure",
+      "passed": false,
+      "hours": 48894
+    }
+  ],
+  "error_log_count": 0,
+  "verdict": {
+    "overall": "FAILING",
+    "reasons": [
+      {
+        "level": "FAIL",
+        "msg": "1130 pending sectors (bad sectors awaiting remap)"
+      },
+      {
+        "level": "FAIL",
+        "msg": "1052 uncorrectable sectors (data loss risk)"
+      },
+      {
+        "level": "WARN",
+        "msg": "48912 power-on hours (>40,000 - aging drive)"
+      }
+    ]
+  },
+  "integrity": {
+    "raw_data_hash": "6d9d1ed2d1a1ffa88e2ec2cb134a202faa85b1323b1597f6ea183245472e91bb",
+    "raw_data_bytes": 7836,
+    "smartctl_version": {
+      "version": "7.4",
+      "build_info": "(local build)",
+      "platform": "x86_64-linux-6.17.13-2-pve"
+    },
+    "consistency": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "self_test_hours_consistent",
+          "passed": true,
+          "detail": "Last test at 48894h, current 48912h"
+        },
+        {
+          "name": "temperature_physical_range",
+          "passed": true,
+          "detail": "30°C (expected 10-70°C)"
+        },
+        {
+          "name": "power_cycle_start_stop_ratio",
+          "passed": false,
+          "detail": "Start/stops: 30117, Power cycles: 3305, Ratio: 9.11"
+        },
+        {
+          "name": "smart_status_matches_attributes",
+          "passed": true,
+          "detail": "PASSED, no pre-fail breaches"
+        },
+        {
+          "name": "serial_format_valid",
+          "passed": true,
+          "detail": "Serial: WD-WMAWZ0137443"
+        },
+        {
+          "name": "capacity_matches_model",
+          "passed": true,
+          "detail": "Model suggests 3TB, actual 3.00TB"
+        },
+        {
+          "name": "attribute_count_sane",
+          "passed": true,
+          "detail": "17 attributes (expected 10-40)"
+        }
+      ]
+    },
+    "timestamp_binding": {
+      "report_generated": "2026-03-21T12:42:34.765Z",
+      "drive_power_on_hours": 48912,
+      "drive_power_cycles": 3305
+    }
+  }
+}
