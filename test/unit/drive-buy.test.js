@@ -239,6 +239,63 @@ describe('config path helpers', () => {
 });
 
 // ============================================================================
+// Profile-based requirements
+// ============================================================================
+describe('checkRequirements — profiles mode', () => {
+  const profileConfig = {
+    profiles: [
+      { name: '3TB ZFS', min_capacity_gb: 2500, max_power_on_hours: 50000, max_pending_sectors: 0 },
+      { name: '2TB Synology', min_capacity_gb: 1500, max_capacity_gb: 2500, max_power_on_hours: 50000, max_pending_sectors: 0 },
+    ],
+  };
+
+  it('3TB drive matches 3TB ZFS profile', () => {
+    const report = { health: { power_on_hours: 20000, pending_sectors: 0 }, drive: { capacity_bytes: 3000592982016 } };
+    const result = checkRequirements(report, profileConfig);
+    expect(result.meets).toBe(true);
+    expect(result.matchedProfiles).toContain('3TB ZFS');
+    expect(result.matchedProfiles).not.toContain('2TB Synology');
+  });
+
+  it('2TB drive matches 2TB Synology profile', () => {
+    const report = { health: { power_on_hours: 15000, pending_sectors: 0 }, drive: { capacity_bytes: 2000398934016 } };
+    const result = checkRequirements(report, profileConfig);
+    expect(result.meets).toBe(true);
+    expect(result.matchedProfiles).toContain('2TB Synology');
+    expect(result.matchedProfiles).not.toContain('3TB ZFS');
+  });
+
+  it('1TB drive matches no profile', () => {
+    const report = { health: { power_on_hours: 5000, pending_sectors: 0 }, drive: { capacity_bytes: 1000204886016 } };
+    const result = checkRequirements(report, profileConfig);
+    expect(result.meets).toBe(false);
+    expect(result.matchedProfiles).toHaveLength(0);
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
+  it('3TB drive with bad sectors fails all profiles', () => {
+    const report = { health: { power_on_hours: 20000, pending_sectors: 5 }, drive: { capacity_bytes: 3000592982016 } };
+    const result = checkRequirements(report, profileConfig);
+    expect(result.meets).toBe(false);
+  });
+
+  it('max_capacity_gb blocks oversized drives from profile', () => {
+    const report = { health: { power_on_hours: 10000, pending_sectors: 0 }, drive: { capacity_bytes: 3000592982016 } };
+    const result = checkRequirements(report, profileConfig);
+    expect(result.matchedProfiles).not.toContain('2TB Synology');
+  });
+});
+
+describe('checkRequirements — backward compat (no profiles)', () => {
+  it('works with legacy requirements block', () => {
+    const report = { health: { power_on_hours: 20000, pending_sectors: 0 }, drive: { capacity_bytes: 3000592982016 } };
+    const result = checkRequirements(report, DEFAULT_CONFIG);
+    expect(result.meets).toBe(true);
+    expect(result.matchedProfiles).toHaveLength(0); // no profiles = empty array
+  });
+});
+
+// ============================================================================
 // DEFAULT_CONFIG structure
 // ============================================================================
 describe('DEFAULT_CONFIG', () => {
