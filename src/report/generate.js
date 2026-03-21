@@ -1,12 +1,12 @@
 /**
  * Verdict engine and report generator.
- * Takes parsed SMART data, produces verdict + full report.
+ * Handles both ATA and NVMe health attributes.
  */
 
 import { generateIntegrity } from './integrity.js';
 
 export function generateReport(parsed, token, toolVersion, rawSmartctlJson = null) {
-  const { drive, health, selfTests, errorCount } = parsed;
+  const { drive, health, selfTests, errorCount, isNvme } = parsed;
   const verdict = computeVerdict(health, errorCount);
   const generated_at = new Date().toISOString();
 
@@ -31,45 +31,83 @@ export function generateReport(parsed, token, toolVersion, rawSmartctlJson = nul
 
 export function computeVerdict(health, errorCount = 0) {
   const reasons = [];
+  const isNvme = health.type === 'nvme';
 
-  // FAILING checks (any = FAILING)
+  // === UNIVERSAL CHECKS ===
   if (health.smart_passed === false) {
     reasons.push({ level: 'FAIL', msg: 'SMART overall health test FAILED' });
   }
-  if (health.pending_sectors > 0) {
-    reasons.push({ level: 'FAIL', msg: `${health.pending_sectors} pending sectors (bad sectors awaiting remap)` });
-  }
-  if (health.uncorrectable_sectors > 0) {
-    reasons.push({ level: 'FAIL', msg: `${health.uncorrectable_sectors} uncorrectable sectors (data loss risk)` });
-  }
-  if (health.reallocated_sectors > 100) {
-    reasons.push({ level: 'FAIL', msg: `${health.reallocated_sectors} reallocated sectors (excessive remapping)` });
-  }
-  if (health.spin_retries > 0) {
-    reasons.push({ level: 'FAIL', msg: `${health.spin_retries} spin retries (motor failure risk)` });
-  }
-  if (health.reported_uncorrectable > 0) {
-    reasons.push({ level: 'FAIL', msg: `${health.reported_uncorrectable} reported uncorrectable errors` });
+
+  // === ATA-SPECIFIC CHECKS ===
+  if (!isNvme) {
+    if (health.pending_sectors > 0) {
+      reasons.push({ level: 'FAIL', msg: `${health.pending_sectors} pending sectors (bad sectors awaiting remap)` });
+    }
+    if (health.uncorrectable_sectors > 0) {
+      reasons.push({ level: 'FAIL', msg: `${health.uncorrectable_sectors} uncorrectable sectors (data loss risk)` });
+    }
+    if (health.reallocated_sectors > 100) {
+      reasons.push({ level: 'FAIL', msg: `${health.reallocated_sectors} reallocated sectors (excessive remapping)` });
+    }
+    if (health.spin_retries > 0) {
+      reasons.push({ level: 'FAIL', msg: `${health.spin_retries} spin retries (motor failure risk)` });
+    }
+    if (health.reported_uncorrectable > 0) {
+      reasons.push({ level: 'FAIL', msg: `${health.reported_uncorrectable} reported uncorrectable errors` });
+    }
+    // ATA warnings
+    if (health.reallocated_sectors > 0 && health.reallocated_sectors <= 100) {
+      reasons.push({ level: 'WARN', msg: `${health.reallocated_sectors} reallocated sectors (some remapping)` });
+    }
+    if (health.crc_errors > 10) {
+      reasons.push({ level: 'WARN', msg: `${health.crc_errors} CRC errors (cable issues)` });
+    }
+    if (health.load_cycles > 200000) {
+      reasons.push({ level: 'WARN', msg: `${health.load_cycles} load cycles (>200K of ~300K rated life)` });
+    }
+    if (health.command_timeouts > 50) {
+      reasons.push({ level: 'WARN', msg: `${health.command_timeouts} command timeouts (controller issues)` });
+    }
   }
 
-  // WARNING checks
+  // === NVMe-SPECIFIC CHECKS ===
+  if (isNvme) {
+    if (health.critical_warning > 0) {
+      reasons.push({ level: 'FAIL', msg: `NVMe critical warning flag: ${health.critical_warning} (drive reporting failure condition)` });
+    }
+    if (health.media_errors > 0) {
+      reasons.push({ level: 'FAIL', msg: `${health.media_errors} NVMe media errors (unrecoverable)` });
+    }
+    if (health.available_spare !== null && health.available_spare_threshold !== null
+        && health.available_spare <= health.available_spare_threshold) {
+      reasons.push({ level: 'FAIL', msg: `NVMe spare ${health.available_spare}% (below threshold ${health.available_spare_threshold}%)` });
+    }
+    if (health.percentage_used > 100) {
+      reasons.push({ level: 'FAIL', msg: `NVMe ${health.percentage_used}% used (exceeded rated endurance)` });
+    }
+    // NVMe warnings
+    if (health.percentage_used > 80 && health.percentage_used <= 100) {
+      reasons.push({ level: 'WARN', msg: `NVMe ${health.percentage_used}% used (approaching endurance limit)` });
+    }
+    if (health.available_spare !== null && health.available_spare < 30
+        && health.available_spare > (health.available_spare_threshold ?? 0)) {
+      reasons.push({ level: 'WARN', msg: `NVMe spare at ${health.available_spare}% (low but above threshold)` });
+    }
+    if (health.unsafe_shutdowns > 100) {
+      reasons.push({ level: 'WARN', msg: `${health.unsafe_shutdowns} unsafe shutdowns (power loss events)` });
+    }
+  }
+
+  // === UNIVERSAL WARNINGS ===
   if (health.power_on_hours > 40000) {
-    reasons.push({ level: 'WARN', msg: `${health.power_on_hours} power-on hours (>40,000 — aging drive)` });
+    reasons.push({ level: 'WARN', msg: `${health.power_on_hours} power-on hours (>40,000 - aging drive)` });
   }
-  if (health.reallocated_sectors > 0 && health.reallocated_sectors <= 100) {
-    reasons.push({ level: 'WARN', msg: `${health.reallocated_sectors} reallocated sectors (some remapping)` });
-  }
-  if (health.temperature_c > 50) {
-    reasons.push({ level: 'WARN', msg: `${health.temperature_c}°C temperature (>50°C — overheating)` });
+  if (health.temperature_c > (isNvme ? 75 : 50)) {
+    const limit = isNvme ? 75 : 50;
+    reasons.push({ level: 'WARN', msg: `${health.temperature_c}C temperature (>${limit}C)` });
   }
   if (errorCount > 0) {
     reasons.push({ level: 'WARN', msg: `${errorCount} errors in error log` });
-  }
-  if (health.crc_errors > 10) {
-    reasons.push({ level: 'WARN', msg: `${health.crc_errors} CRC errors (cable issues)` });
-  }
-  if (health.load_cycles > 200000) {
-    reasons.push({ level: 'WARN', msg: `${health.load_cycles} load cycles (>200K of ~300K rated life)` });
   }
 
   const hasFail = reasons.some(r => r.level === 'FAIL');

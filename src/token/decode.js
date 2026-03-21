@@ -17,7 +17,7 @@
 
 const TOKEN_SIMPLE = /^dc-[a-zA-Z0-9]{8,24}$/;
 const TOKEN_TIMED = /^dc-[a-zA-Z0-9]{8,24}-t([0-9a-f]{8})$/;
-const MAX_AGE_SECONDS = 48 * 3600; // 48 hours
+const MAX_AGE_SECONDS = 7 * 24 * 3600; // 7 days — marketplace conversations are slow
 
 export function validateToken(token) {
   if (!token || typeof token !== 'string') {

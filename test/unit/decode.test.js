@@ -57,8 +57,8 @@ describe('validateToken — timed tokens', () => {
     expect(r.age_seconds).toBeGreaterThan(24 * 3600 - 60);
   });
 
-  it('rejects token older than 48h', () => {
-    const ts = Math.floor(Date.now() / 1000 - 49 * 3600).toString(16);
+  it('rejects token older than 7 days', () => {
+    const ts = Math.floor(Date.now() / 1000 - 8 * 24 * 3600).toString(16);
     const token = `dc-abcdef123456-t${ts}`;
     const r = validateToken(token);
     expect(r.valid).toBe(false);

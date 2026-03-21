@@ -9,9 +9,14 @@ export function collectSmart(smartctlPath, devicePath) {
   return new Promise((resolve, reject) => {
     const args = ['-j', '-a', devicePath];
 
-    execFile(smartctlPath, args, { timeout: 30000, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+    execFile(smartctlPath, args, { timeout: 60000, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
       // smartctl returns non-zero for various warnings, but still outputs valid JSON
       if (!stdout) {
+        const msg = (err?.message ?? '') + ' ' + (stderr ?? '');
+        if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('eacces')) {
+          reject(new Error('PERMISSION_DENIED'));
+          return;
+        }
         reject(new Error(`smartctl returned no output for ${devicePath}: ${err?.message ?? 'unknown error'}`));
         return;
       }

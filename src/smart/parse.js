@@ -1,6 +1,6 @@
 /**
  * Parse smartctl JSON output into normalized drive health data.
- * Handles both ATA and NVMe drive types.
+ * Handles both ATA (HDD/SATA SSD) and NVMe drive types.
  */
 
 const ATA_ATTRS = {
@@ -19,15 +19,16 @@ const ATA_ATTRS = {
 
 export function parseSmartctl(json) {
   const drive = parseDriveIdentity(json);
-  const health = parseHealth(json);
-  const selfTests = parseSelfTests(json);
+  const isNvme = (json.device?.protocol ?? '').toLowerCase() === 'nvme'
+    || !!json.nvme_smart_health_information_log;
+  const health = isNvme ? parseNvmeHealth(json) : parseAtaHealth(json);
+  const selfTests = isNvme ? parseNvmeSelfTests(json) : parseAtaSelfTests(json);
   const errorCount = json.ata_smart_error_log?.summary?.count ?? 0;
 
-  return { drive, health, selfTests, errorCount };
+  return { drive, health, selfTests, errorCount, isNvme };
 }
 
 function parseDriveIdentity(json) {
-  const dev = json.model_name ? json : (json.device ?? {});
   return {
     model: json.model_name ?? json.model_family ?? 'Unknown',
     model_family: json.model_family ?? '',
@@ -35,47 +36,34 @@ function parseDriveIdentity(json) {
     firmware: json.firmware_version ?? '',
     capacity_bytes: json.user_capacity?.bytes ?? 0,
     capacity_human: formatBytes(json.user_capacity?.bytes ?? 0),
-    rotation_rpm: json.rotation_rate ?? 0,
+    rotation_rpm: json.rotation_rate ?? null,
     form_factor: json.form_factor?.name ?? '',
     interface: json.device?.type ?? 'unknown',
     protocol: json.device?.protocol ?? 'unknown',
   };
 }
 
-function parseHealth(json) {
+function parseAtaHealth(json) {
   const smartPassed = json.smart_status?.passed ?? null;
   const attrs = {};
 
-  // ATA drives: attributes in ata_smart_attributes.table
   if (json.ata_smart_attributes?.table) {
     for (const attr of json.ata_smart_attributes.table) {
       const name = ATA_ATTRS[attr.id];
       if (name) {
+        // Temperature may be packed as min/max — use raw.value directly
         attrs[name] = attr.raw?.value ?? 0;
       }
     }
   }
 
-  // NVMe drives: health info in nvme_smart_health_information_log
-  if (json.nvme_smart_health_information_log) {
-    const nvme = json.nvme_smart_health_information_log;
-    attrs.power_on_hours = nvme.power_on_hours ?? 0;
-    attrs.temperature_c = nvme.temperature ?? 0;
-    attrs.pending_sectors = 0;
-    attrs.uncorrectable_sectors = nvme.media_errors ?? 0;
-    attrs.reallocated_sectors = 0;
-    attrs.crc_errors = 0;
-    attrs.spin_retries = 0;
-    attrs.reported_uncorrectable = 0;
-    attrs.load_cycles = 0;
-    attrs.command_timeouts = 0;
-  }
-
   return {
+    type: 'ata',
     smart_passed: smartPassed,
     power_on_hours: attrs.power_on_hours ?? 0,
     temperature_c: attrs.temperature_c ?? 0,
     reallocated_sectors: attrs.reallocated_sectors ?? 0,
+    reallocated_events: attrs.reallocated_events ?? 0,
     pending_sectors: attrs.pending_sectors ?? 0,
     uncorrectable_sectors: attrs.uncorrectable_sectors ?? 0,
     crc_errors: attrs.crc_errors ?? 0,
@@ -83,17 +71,62 @@ function parseHealth(json) {
     reported_uncorrectable: attrs.reported_uncorrectable ?? 0,
     load_cycles: attrs.load_cycles ?? 0,
     command_timeouts: attrs.command_timeouts ?? 0,
-    reallocated_events: attrs.reallocated_events ?? 0,
+    // NVMe-specific fields set to null for ATA
+    percentage_used: null,
+    available_spare: null,
+    available_spare_threshold: null,
+    critical_warning: null,
+    media_errors: null,
+    unsafe_shutdowns: null,
   };
 }
 
-function parseSelfTests(json) {
+function parseNvmeHealth(json) {
+  const smartPassed = json.smart_status?.passed ?? null;
+  const nvme = json.nvme_smart_health_information_log ?? {};
+
+  return {
+    type: 'nvme',
+    smart_passed: smartPassed,
+    power_on_hours: nvme.power_on_hours ?? 0,
+    temperature_c: nvme.temperature ?? 0,
+    // NVMe-specific
+    percentage_used: nvme.percentage_used ?? 0,
+    available_spare: nvme.available_spare ?? 100,
+    available_spare_threshold: nvme.available_spare_threshold ?? 10,
+    critical_warning: nvme.critical_warning ?? 0,
+    media_errors: nvme.media_errors ?? 0,
+    unsafe_shutdowns: nvme.unsafe_shutdowns ?? 0,
+    // ATA-equivalent mappings
+    reallocated_sectors: 0,
+    reallocated_events: 0,
+    pending_sectors: 0,
+    uncorrectable_sectors: nvme.media_errors ?? 0,
+    crc_errors: 0,
+    spin_retries: 0,
+    reported_uncorrectable: 0,
+    load_cycles: 0,
+    command_timeouts: 0,
+  };
+}
+
+function parseAtaSelfTests(json) {
   const table = json.ata_smart_self_test_log?.standard?.table ?? [];
   return table.slice(0, 5).map(t => ({
     type: t.type?.string ?? 'unknown',
     status: t.status?.string ?? 'unknown',
     passed: t.status?.passed ?? false,
     hours: t.lifetime_hours ?? 0,
+  }));
+}
+
+function parseNvmeSelfTests(json) {
+  const table = json.nvme_self_test_log?.table ?? [];
+  return table.slice(0, 5).map(t => ({
+    type: t.self_test_code?.string ?? 'unknown',
+    status: t.self_test_result?.string ?? 'unknown',
+    passed: t.self_test_result?.value === 0,
+    hours: t.power_on_hours ?? 0,
   }));
 }
 

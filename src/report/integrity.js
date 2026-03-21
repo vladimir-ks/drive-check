@@ -104,8 +104,8 @@ function runConsistencyChecks(raw, parsed) {
   if (parsed.health.temperature_c > 0) {
     checks.push({
       name: 'temperature_physical_range',
-      passed: parsed.health.temperature_c >= 10 && parsed.health.temperature_c <= 70,
-      detail: `${parsed.health.temperature_c}°C (expected 10-70°C)`,
+      passed: parsed.health.temperature_c >= 10 && parsed.health.temperature_c <= (parsed.isNvme ? 85 : 70),
+      detail: `${parsed.health.temperature_c}°C (expected 10-${parsed.isNvme ? 85 : 70}°C)`,
     });
   }
 
@@ -150,7 +150,7 @@ function runConsistencyChecks(raw, parsed) {
   // 6. Serial number format (WD drives: WD-XXXXXXXXXXXX)
   const serial = parsed.drive.serial;
   if (serial && serial !== 'Unknown') {
-    const looksValid = /^[A-Z0-9][A-Z0-9\-_]{5,20}$/.test(serial);
+    const looksValid = /^[A-Za-z0-9][A-Za-z0-9\-_]{5,30}$/.test(serial);
     checks.push({
       name: 'serial_format_valid',
       passed: looksValid,
