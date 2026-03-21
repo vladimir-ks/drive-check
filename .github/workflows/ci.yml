@@ -22,7 +22,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: [18, 22]
       fail-fast: false
 
@@ -36,14 +36,20 @@ jobs:
 
       - run: npm ci
 
-      - name: Syntax check
-        run: |
-          find src bin -name '*.js' -exec node --check {} +
+      - name: Syntax check (unix)
+        if: runner.os != 'Windows'
+        run: find src bin -name '*.js' -exec node --check {} +
+
+      - name: Syntax check (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-ChildItem -Recurse -Filter *.js -Path src,bin | ForEach-Object { node --check $_.FullName }
 
       - name: Run tests
         run: npm test
 
       - name: Verify zero runtime deps
+        shell: bash
         run: |
           deps=$(node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log(Object.keys(p.dependencies||{}).length)")
           if [ "$deps" != "0" ]; then
@@ -53,3 +59,56 @@ jobs:
 
       - name: Verify package contents
         run: npm pack --dry-run 2>&1
+
+      - name: Security audit — no unauthorized APIs
+        shell: bash
+        run: |
+          echo "Checking for unauthorized API usage in source..."
+          FAIL=0
+          # Must not access filesystem beyond own package.json and report output
+          if grep -rn 'os\.hostname\|os\.userInfo\|os\.networkInterfaces' src/; then
+            echo "FAIL: Found os.* system info access"
+            FAIL=1
+          fi
+          if grep -rn 'process\.env' src/; then
+            echo "FAIL: Found process.env access"
+            FAIL=1
+          fi
+          # Must use execFile, never exec (shell injection prevention)
+          if grep -rn "exec(" src/ | grep -v execFile | grep -v "// "; then
+            echo "FAIL: Found exec() — must use execFile()"
+            FAIL=1
+          fi
+          if grep -rn 'eval\|new Function' src/; then
+            echo "FAIL: Found eval/Function constructor"
+            FAIL=1
+          fi
+          if [ "$FAIL" = "1" ]; then exit 1; fi
+          echo "Security audit passed"
+
+  package-integrity:
+    name: Package Integrity Check
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify published package is self-contained
+        run: |
+          npm pack
+          TARBALL=$(ls *.tgz)
+          mkdir /tmp/verify && cd /tmp/verify
+          tar xzf $GITHUB_WORKSPACE/$TARBALL
+          # Verify no unexpected files
+          find package/ -type f | sort
+          # Verify entry point works
+          node --check package/bin/drive-check.js
+          node --check package/src/index.js
+          echo "Package integrity verified"
