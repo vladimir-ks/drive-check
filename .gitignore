@@ -7,3 +7,4 @@ Thumbs.db
 .npmrc
 drive-report-*.json
 .drive-checks.json
+.drive-reports/
