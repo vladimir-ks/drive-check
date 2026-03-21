@@ -1,6 +1,6 @@
 {
   "name": "drive-check",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Independent HDD/SSD health verification for used drive sales",
   "type": "module",
   "bin": {
