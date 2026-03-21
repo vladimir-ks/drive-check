@@ -38,7 +38,5 @@ jobs:
             exit 1
           fi
 
-      - name: Publish with provenance
+      - name: Publish with provenance (OIDC trusted publisher)
         run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
