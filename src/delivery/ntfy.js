@@ -10,7 +10,7 @@ export async function sendToNtfy(topic, report, signature) {
   const response = await fetch(url, {
     method: 'POST',
     headers: {
-      'Title': `Drive Check: ${report.drive?.model ?? 'Unknown'} — ${report.verdict?.overall ?? '?'}`,
+      'Title': `Drive Check: ${report.drive?.model ?? 'Unknown'} - ${report.verdict?.overall ?? '?'}`,
       'Priority': report.verdict?.overall === 'FAILING' ? '4' : '3',
       'Tags': `hard_drive,${(report.verdict?.overall ?? 'unknown').toLowerCase()}`,
       'Content-Type': 'application/json',

@@ -1,0 +1,3 @@
+#!/bin/bash
+# Mock smartctl wrapper — routes to mock-smartctl.mjs
+exec node "$(dirname "$0")/mock-smartctl.mjs" "$@"
