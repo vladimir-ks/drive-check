@@ -1,0 +1,44 @@
+name: Release
+
+# Publish to npm ONLY on version tags
+# This is the only workflow that costs anything (npm token usage)
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: read
+  id-token: write  # required for npm provenance
+
+jobs:
+  publish:
+    name: Publish to npm
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+
+      - name: Run full test suite
+        run: npm test
+
+      - name: Verify zero runtime deps
+        run: |
+          deps=$(node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log(Object.keys(p.dependencies||{}).length)")
+          if [ "$deps" != "0" ]; then
+            echo "ERROR: Cannot publish with runtime dependencies"
+            exit 1
+          fi
+
+      - name: Publish with provenance
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

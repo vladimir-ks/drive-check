@@ -1,0 +1,55 @@
+name: CI
+
+# Quality gate: runs on PRs to main and pushes to main only
+# Dev/feature branch pushes = FREE (no CI)
+on:
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 22]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: Syntax check
+        run: |
+          find src bin -name '*.js' -exec node --check {} +
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify zero runtime deps
+        run: |
+          deps=$(node -e "const p=JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log(Object.keys(p.dependencies||{}).length)")
+          if [ "$deps" != "0" ]; then
+            echo "ERROR: Expected 0 runtime dependencies, found $deps"
+            exit 1
+          fi
+
+      - name: Verify package contents
+        run: npm pack --dry-run 2>&1

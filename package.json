@@ -1,0 +1,44 @@
+{
+  "name": "drive-check",
+  "version": "1.0.0",
+  "description": "Independent HDD/SSD health verification for used drive sales",
+  "type": "module",
+  "bin": {
+    "drive-check": "./bin/drive-check.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "node --check src/**/*.js bin/*.js"
+  },
+  "keywords": [
+    "hdd",
+    "ssd",
+    "smart",
+    "health",
+    "drive",
+    "verification",
+    "used-drives",
+    "smartmontools"
+  ],
+  "author": "vladimir-ks",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vladimir-ks/drive-check"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "PRIVACY.md"
+  ],
+  "devDependencies": {
+    "vitest": "^3.0.0"
+  }
+}
