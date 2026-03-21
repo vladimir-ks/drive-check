@@ -219,6 +219,8 @@ export async function run(token) {
         const answers = await runQuestionnaire();
         if (answers) {
           report.seller_responses = answers;
+          // Re-sign after mutation (signature must match report content)
+          signature = signReport(report, effectiveToken, pkg.version);
           saveLocalReport(report, signature, token);
           // Re-send with answers (best-effort)
           if (shouldSend) {

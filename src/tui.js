@@ -140,7 +140,7 @@ export async function confirm(message, defaultYes = true) {
         cleanup();
         resolve(false);
       }
-    });
+    }, { confirmMode: true });
     listen();
   });
 }
@@ -227,7 +227,12 @@ function clearUp(n) {
   }
 }
 
-function rawMode(handler) {
+/**
+ * @param {Function} handler - key event handler
+ * @param {Object} opts
+ * @param {boolean} opts.confirmMode - when true, y/n dispatched as special events; otherwise as 'char'
+ */
+function rawMode(handler, opts = {}) {
   let active = true;
 
   const onData = (buf) => {
@@ -248,10 +253,14 @@ function rawMode(handler) {
     if (s === '\r' || s === '\n') return handler('enter');
     if (s === ' ') return handler('space');
     if (s === '\x7f' || s === '\b') return handler('backspace');
-    if (s === 'y' || s === 'Y') return handler('y');
-    if (s === 'n' || s === 'N') return handler('n');
 
-    // Printable ASCII
+    // y/n only special in confirm mode; otherwise fall through to char
+    if (opts.confirmMode) {
+      if (s === 'y' || s === 'Y') return handler('y');
+      if (s === 'n' || s === 'N') return handler('n');
+    }
+
+    // Printable ASCII (including y, n in non-confirm mode)
     if (s.length === 1 && s.charCodeAt(0) >= 32 && s.charCodeAt(0) < 127) {
       return handler('char', s);
     }
@@ -274,4 +283,15 @@ function rawMode(handler) {
   };
 
   return { cleanup, listen };
+}
+
+// Ensure terminal is restored on unexpected exit (SIGTERM, crash, etc.)
+const _restoreTerminal = () => {
+  try { process.stdin.setRawMode(false); } catch {}
+  try { process.stdout.write(SHOW_CURSOR); } catch {}
+};
+process.on('exit', _restoreTerminal);
+if (process.platform !== 'win32') {
+  process.on('SIGTERM', () => { _restoreTerminal(); process.exit(143); });
+  process.on('SIGHUP', () => { _restoreTerminal(); process.exit(129); });
 }

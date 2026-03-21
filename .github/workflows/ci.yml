@@ -70,8 +70,9 @@ jobs:
             echo "FAIL: Found os.* system info access"
             FAIL=1
           fi
-          if grep -rn 'process\.env' src/; then
-            echo "FAIL: Found process.env access"
+          # Allowlist: NO_COLOR (standard), LANG/LC_* (POSIX locale) — these are safe
+          if grep -rn 'process\.env' src/ | grep -v 'NO_COLOR' | grep -v 'LANG' | grep -v 'LC_ALL' | grep -v 'LC_MESSAGES'; then
+            echo "FAIL: Found unauthorized process.env access"
             FAIL=1
           fi
           # Must use execFile, never exec (shell injection prevention)

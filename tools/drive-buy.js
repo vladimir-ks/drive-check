@@ -548,6 +548,7 @@ async function cmdInbox() {
         // Handle multi-drive (v1.2) and single-drive (v1.1)
         entry.status = 'received';
         entry.received_at = new Date().toISOString();
+        let entryMeetsReq = false;
 
         if (reportData.version === '1.2' && reportData.drives) {
           // Multi-drive report
@@ -557,12 +558,16 @@ async function cmdInbox() {
           entry.verdict = verdicts.join(', ');
           entry.drive_model = reportData.drives.map(d => d.drive?.model).join(', ');
 
+          const allReqChecks = reportData.drives.map(d => checkRequirements(d, config));
+          entryMeetsReq = allReqChecks.some(r => r.meets);
+          entry.meets_requirements = entryMeetsReq;
+
           if (!isQuiet) {
-            console.log(`RECEIVED — ${entry.drive_count} drives from ${entry.seller || 'seller'}:`);
-            for (const d of reportData.drives) {
-              const reqCheck = checkRequirements(d, config);
-              const reqTag = reqCheck.meets ? '\x1b[32mMATCH\x1b[0m' : '\x1b[33mFAIL\x1b[0m';
-              console.log(`  ${d.drive?.model || '?'} — ${d.verdict?.overall} — ${reqTag}`);
+            console.log(`RECEIVED \u2014 ${entry.drive_count} drives from ${entry.seller || 'seller'}:`);
+            for (let di = 0; di < reportData.drives.length; di++) {
+              const d = reportData.drives[di];
+              const reqTag = allReqChecks[di].meets ? '\x1b[32mMATCH\x1b[0m' : '\x1b[33mFAIL\x1b[0m';
+              console.log(`  ${d.drive?.model || '?'} \u2014 ${d.verdict?.overall} \u2014 ${reqTag}`);
             }
           }
           received += reportData.drive_count;
@@ -573,6 +578,7 @@ async function cmdInbox() {
           entry.drive_model = reportData.drive?.model ?? '?';
           entry.drive_serial = reportData.drive?.serial ?? '?';
           entry.power_on_hours = reportData.health?.power_on_hours ?? 0;
+          entryMeetsReq = reqCheck.meets;
           entry.meets_requirements = reqCheck.meets;
           if (!reqCheck.meets) entry.requirement_issues = reqCheck.issues;
 
@@ -580,7 +586,7 @@ async function cmdInbox() {
             const reqTag = reqCheck.meets
               ? '\x1b[32mMEETS REQ\x1b[0m'
               : '\x1b[33mFAILS REQ\x1b[0m';
-            console.log(`RECEIVED — ${entry.verdict} — ${entry.drive_model} — ${reqTag}`);
+            console.log(`RECEIVED \u2014 ${entry.verdict} \u2014 ${entry.drive_model} \u2014 ${reqTag}`);
             if (!reqCheck.meets) {
               console.log(`           Issues: ${reqCheck.issues.join(', ')}`);
             }
@@ -588,25 +594,26 @@ async function cmdInbox() {
           received++;
         }
 
-        // macOS notification
+        // macOS notification (sanitize inputs to prevent shell injection)
         if (process.platform === 'darwin') {
-          const title = reqCheck.meets ? 'MATCH' : entry.verdict;
-          const body = `${entry.drive_model} from ${entry.seller || 'seller'}`;
+          const ntfTitle = entryMeetsReq ? 'MATCH' : (entry.verdict || '?');
+          const ntfBody = `${(entry.drive_model || '?')} from ${entry.seller || 'seller'}`;
           try {
-            execSync(`osascript -e 'display notification "${body}" with title "drive-buy: ${title}"'`);
+            execFileSync('osascript', ['-e',
+              `display notification "${ntfBody.replace(/["\\]/g, '')}" with title "drive-buy: ${ntfTitle.replace(/["\\]/g, '')}"`]);
           } catch { /* notification is best-effort */ }
         }
 
         // Custom notify command from config
         if (config.polling?.notify_command) {
           try {
-            execSync(config.polling.notify_command, {
+            execFileSync('/bin/sh', ['-c', config.polling.notify_command], {
               env: {
                 ...process.env,
-                DRIVE_MODEL: entry.drive_model,
+                DRIVE_MODEL: entry.drive_model || '',
                 SELLER: entry.seller || '',
-                VERDICT: entry.verdict,
-                MEETS_REQ: String(reqCheck.meets),
+                VERDICT: entry.verdict || '',
+                MEETS_REQ: String(entryMeetsReq),
               },
               timeout: 10000,
             });
@@ -1171,7 +1178,7 @@ async function fetchReport(entry) {
     if (!m.message && !m.attachment) return false;
     try {
       const data = m.message ? JSON.parse(m.message) : null;
-      return data?.version === '1.1' && data?.drive;
+      return (data?.version === '1.1' && data?.drive) || (data?.version === '1.2' && data?.drives);
     } catch {
       return !!m.attachment;
     }

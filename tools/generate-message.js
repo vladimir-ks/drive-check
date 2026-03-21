@@ -200,7 +200,7 @@ Requiere Node.js (https://nodejs.org) — la herramienta te guía
 con el resto. Una captura de CrystalDiskInfo también sirve. ¡Gracias!`,
   };
 
-  return messages[lang];
+  return messages[lang] || messages.en;
 }
 
 function extractListingId(url) {
