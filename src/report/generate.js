@@ -3,14 +3,17 @@
  * Takes parsed SMART data, produces verdict + full report.
  */
 
-export function generateReport(parsed, token, toolVersion) {
+import { generateIntegrity } from './integrity.js';
+
+export function generateReport(parsed, token, toolVersion, rawSmartctlJson = null) {
   const { drive, health, selfTests, errorCount } = parsed;
   const verdict = computeVerdict(health, errorCount);
+  const generated_at = new Date().toISOString();
 
-  return {
-    version: '1.0',
+  const report = {
+    version: '1.1',
     token,
-    generated_at: new Date().toISOString(),
+    generated_at,
     tool_version: toolVersion,
     drive,
     health,
@@ -18,6 +21,12 @@ export function generateReport(parsed, token, toolVersion) {
     error_log_count: errorCount,
     verdict,
   };
+
+  if (rawSmartctlJson) {
+    report.integrity = generateIntegrity(rawSmartctlJson, parsed, generated_at);
+  }
+
+  return report;
 }
 
 export function computeVerdict(health, errorCount = 0) {

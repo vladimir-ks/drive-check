@@ -23,7 +23,7 @@ describe('Full pipeline: parse → generate → sign → format', () => {
 
     // Generate
     const report = generateReport(parsed, TOKEN, VERSION);
-    expect(report.version).toBe('1.0');
+    expect(report.version).toBe('1.1');
     expect(report.token).toBe(TOKEN);
     expect(report.drive.model).toContain('WD30EZRX');
 

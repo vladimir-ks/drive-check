@@ -124,7 +124,7 @@ describe('generateReport — real fixtures', () => {
   it('healthy drive → HEALTHY or WARNING (high hours)', () => {
     const parsed = parseSmartctl(healthy);
     const report = generateReport(parsed, 'dc-test12345678', '1.0.0');
-    expect(report.version).toBe('1.0');
+    expect(report.version).toBe('1.1');
     expect(report.token).toBe('dc-test12345678');
     expect(report.drive.serial).toBe('WD-WCC1T0994579');
     expect(['HEALTHY', 'WARNING']).toContain(report.verdict.overall);

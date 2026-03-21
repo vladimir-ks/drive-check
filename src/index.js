@@ -82,9 +82,9 @@ export async function run(token) {
     const rawSmart = await collectSmart(smartctl.path, selectedDrive.path);
     sp.stop(color.green('✓ SMART data collected'));
 
-    // 7. Parse + generate report
+    // 7. Parse + generate report (with integrity envelope)
     const parsed = parseSmartctl(rawSmart);
-    const report = generateReport(parsed, token, pkg.version);
+    const report = generateReport(parsed, token, pkg.version, rawSmart);
     const signature = signReport(report, token, pkg.version);
 
     // 8. Show report to seller (mandatory preview)
