@@ -1,33 +1,138 @@
 #!/usr/bin/env node
 
 /**
- * Generate seller message with fresh token + auto-subscribe.
+ * Generate seller message with fresh token linked to a listing.
  *
  * Usage:
- *   node tools/generate-message.js           # English, print only
- *   node tools/generate-message.js --es      # Spanish
- *   node tools/generate-message.js --copy    # + copy to clipboard (macOS)
- *   node tools/generate-message.js --go      # copy + open ntfy in browser + subscribe in app
+ *   drive-msg <URL> [seller-name] [--es] [--copy]
+ *   drive-msg "https://wallapop.com/item/disco-duro-3tb-1234" "Carlos"
+ *   drive-msg "https://wallapop.com/item/disco-duro-3tb-1234" "Carlos" --es --copy
+ *   drive-msg --go   (interactive: prompts for URL and name)
  *
  * Alias (add to ~/.zshrc):
- *   alias drive-msg='node ~/homelab-setup/drive-check/tools/generate-message.js --go'
- *   alias drive-msg-es='node ~/homelab-setup/drive-check/tools/generate-message.js --es --go'
+ *   alias drive-msg='node ~/homelab-setup/drive-check/tools/generate-message.js'
  */
 
 import { execSync } from 'node:child_process';
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createInterface } from 'node:readline';
 
-const lang = process.argv.includes('--es') ? 'es' : 'en';
-const go = process.argv.includes('--go');
-const shouldCopy = go || process.argv.includes('--copy');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const LEDGER_PATH = join(__dirname, '..', '.drive-checks.json');
 
-// Generate timed token
-const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-const ts = Math.floor(Date.now() / 1000).toString(16);
-const token = `dc-${id}-t${ts}`;
-const ntfyUrl = `https://ntfy.sh/${token}`;
+// Parse args
+const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
+const flags = process.argv.slice(2).filter(a => a.startsWith('--'));
+const lang = flags.includes('--es') ? 'es' : 'en';
+const shouldCopy = flags.includes('--copy') || flags.includes('--go');
+const interactive = flags.includes('--go') || args.length === 0;
 
-const messages = {
-  en: `Hi! I'm interested in your drive.
+// Interactive or from args
+let listingUrl = args[0] || '';
+let sellerName = args[1] || '';
+
+async function main() {
+  if (interactive && !listingUrl) {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    const ask = (q) => new Promise(r => rl.question(q, r));
+
+    listingUrl = await ask('Listing URL (paste link): ');
+    sellerName = await ask('Seller name (optional): ');
+    rl.close();
+  }
+
+  // Extract listing ID from URL for short reference
+  const listingId = extractListingId(listingUrl);
+  const platform = detectPlatform(listingUrl);
+
+  // Generate timed token
+  const id = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+  const ts = Math.floor(Date.now() / 1000).toString(16);
+  const token = `dc-${id}-t${ts}`;
+  const ntfyUrl = `https://ntfy.sh/${token}`;
+  const expires = new Date((Math.floor(Date.now() / 1000) + 48 * 3600) * 1000);
+
+  // Build message
+  const message = buildMessage(lang, token, sellerName);
+
+  // Save to ledger
+  saveLedger({
+    token,
+    listing_url: listingUrl,
+    listing_id: listingId,
+    platform,
+    seller: sellerName || null,
+    language: lang,
+    created: new Date().toISOString(),
+    expires: expires.toISOString(),
+    status: 'pending',
+  });
+
+  // Output
+  console.log('\n' + '='.repeat(60));
+  console.log(`Token:     ${token}`);
+  console.log(`Seller:    ${sellerName || '(unnamed)'}`);
+  console.log(`Platform:  ${platform}`);
+  console.log(`Listing:   ${listingUrl || '(none)'}`);
+  console.log(`Subscribe: ${ntfyUrl}`);
+  console.log(`Expires:   ${expires.toLocaleString()}`);
+  console.log('='.repeat(60));
+  console.log('\n' + message + '\n');
+  console.log('='.repeat(60));
+
+  // Copy to clipboard
+  if (shouldCopy && process.platform === 'darwin') {
+    try {
+      execSync('pbcopy', { input: message });
+      console.log('\n✓ Message copied to clipboard');
+    } catch { /* ignore */ }
+  }
+
+  // Auto-subscribe
+  if (process.platform === 'darwin') {
+    try {
+      execSync(`open "${ntfyUrl}"`, { stdio: 'ignore' });
+      console.log('✓ Opened ntfy topic in browser');
+    } catch { /* ignore */ }
+
+    // Send activation ping
+    try {
+      const title = sellerName
+        ? `Waiting: ${sellerName} (${platform})`
+        : `Waiting: ${platform} listing`;
+      execSync(`curl -s -o /dev/null -H "Title: ${title}" -H "Priority: 1" -H "Tags: hourglass" -d "${listingUrl || 'no URL'}" "${ntfyUrl}"`, { timeout: 5000 });
+      console.log('✓ Topic activated');
+    } catch { /* ignore */ }
+  }
+
+  // Show ledger summary
+  const ledger = loadLedger();
+  const pending = ledger.filter(e => e.status === 'pending').length;
+  console.log(`\n${pending} pending check(s) in ledger. Run with --list to view all.`);
+
+  // List mode
+  if (flags.includes('--list')) {
+    console.log('\n--- Ledger ---');
+    for (const entry of ledger) {
+      const age = Math.floor((Date.now() - new Date(entry.created).getTime()) / 3600000);
+      const expired = new Date(entry.expires) < new Date();
+      const status = expired ? 'EXPIRED' : entry.status.toUpperCase();
+      console.log(`  ${entry.token.slice(0, 20)}  ${status.padEnd(8)}  ${age}h ago  ${entry.seller || '-'}  ${entry.platform}  ${entry.listing_url?.slice(0, 50) || '-'}`);
+    }
+  }
+
+  console.log('');
+}
+
+function buildMessage(lang, token, seller) {
+  const greeting = seller
+    ? (lang === 'es' ? `¡Hola${seller ? ' ' + seller : ''}!` : `Hi${seller ? ' ' + seller : ''}!`)
+    : (lang === 'es' ? '¡Hola!' : 'Hi!');
+
+  const messages = {
+    en: `${greeting} I'm interested in your drive.
 
 Could you tell me a bit about its history?
 - What kind of system was it in?
@@ -45,7 +150,7 @@ https://github.com/vladimir-ks/drive-check
 
 A CrystalDiskInfo screenshot also works. Thanks!`,
 
-  es: `¡Hola! Me interesa tu disco.
+    es: `${greeting} Me interesa tu disco.
 
 ¿Podrías contarme un poco sobre su historia?
 - ¿En qué tipo de sistema estuvo?
@@ -62,53 +167,47 @@ Código abierto, solo lectura, ves todo antes de enviar:
 https://github.com/vladimir-ks/drive-check
 
 Una captura de CrystalDiskInfo también sirve. ¡Gracias!`,
-};
+  };
 
-const message = messages[lang];
-const expires = new Date((Math.floor(Date.now() / 1000) + 48 * 3600) * 1000).toLocaleString();
-
-// Output
-console.log('\n' + '='.repeat(60));
-console.log(`Token:     ${token}`);
-console.log(`Subscribe: ${ntfyUrl}`);
-console.log(`Expires:   ${expires}`);
-console.log('='.repeat(60));
-console.log('\n' + message + '\n');
-console.log('='.repeat(60));
-
-// Actions
-if (shouldCopy && process.platform === 'darwin') {
-  try {
-    execSync('pbcopy', { input: message });
-    console.log('\n✓ Message copied to clipboard');
-  } catch { /* ignore */ }
+  return messages[lang];
 }
 
-if (go && process.platform === 'darwin') {
+function extractListingId(url) {
+  if (!url) return null;
+  // Wallapop: /item/slug-123456789
+  const wallapop = url.match(/item\/[\w-]+-(\d+)/);
+  if (wallapop) return wallapop[1];
+  // eBay: /itm/123456789
+  const ebay = url.match(/itm\/(\d+)/);
+  if (ebay) return ebay[1];
+  // Generic: last path segment
+  const last = url.split('/').filter(Boolean).pop();
+  return last || null;
+}
+
+function detectPlatform(url) {
+  if (!url) return 'direct';
+  if (url.includes('wallapop')) return 'wallapop';
+  if (url.includes('ebay')) return 'ebay';
+  if (url.includes('kleinanzeigen') || url.includes('ebay-kleinanzeigen')) return 'kleinanzeigen';
+  if (url.includes('milanuncios')) return 'milanuncios';
+  if (url.includes('facebook') || url.includes('fb.com')) return 'facebook';
+  if (url.includes('avito')) return 'avito';
+  return 'other';
+}
+
+function loadLedger() {
   try {
-    // Subscribe in ntfy app (iOS/macOS universal link)
-    execSync(`open "ntfy://${token}"`, { stdio: 'ignore' });
-    console.log('✓ Subscribing in ntfy app...');
+    return JSON.parse(readFileSync(LEDGER_PATH, 'utf8'));
   } catch {
-    // Fallback: open in browser
-    try {
-      execSync(`open "${ntfyUrl}"`, { stdio: 'ignore' });
-      console.log('✓ Opened in browser');
-    } catch { /* ignore */ }
+    return [];
   }
-
-  // Send a silent marker to the topic so we know it's active
-  try {
-    execSync(`curl -s -o /dev/null -H "Title: Listening..." -H "Priority: 1" -H "Tags: ear" -d "Waiting for seller report on ${token}" "${ntfyUrl}"`, { timeout: 5000 });
-    console.log('✓ Topic activated (test notification sent)');
-  } catch { /* network issue, fine */ }
 }
 
-if (!shouldCopy && !go) {
-  console.log('\nUsage:');
-  console.log('  --copy   Copy message to clipboard');
-  console.log('  --go     Copy + subscribe + activate (full workflow)');
-  console.log('  --es     Spanish message');
+function saveLedger(entry) {
+  const ledger = loadLedger();
+  ledger.push(entry);
+  writeFileSync(LEDGER_PATH, JSON.stringify(ledger, null, 2), 'utf8');
 }
 
-console.log('');
+main().catch(e => { console.error(e.message); process.exit(1); });
