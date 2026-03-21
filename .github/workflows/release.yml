@@ -1,7 +1,6 @@
 name: Release
 
 # Publish to npm ONLY on version tags
-# This is the only workflow that costs anything (npm token usage)
 on:
   push:
     tags:
@@ -9,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  id-token: write  # required for npm provenance
+  id-token: write  # required for npm provenance + OIDC trusted publisher
 
 jobs:
   publish:
@@ -40,3 +39,5 @@ jobs:
 
       - name: Publish with provenance (OIDC trusted publisher)
         run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
