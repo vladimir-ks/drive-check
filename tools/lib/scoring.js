@@ -86,10 +86,45 @@ export function computeLifeScore(report) {
 }
 
 // ============================================================================
-// REQUIREMENTS CHECKER
+// REQUIREMENTS CHECKER — supports named profiles
 // ============================================================================
+/**
+ * Check a drive report against config requirements.
+ * If config.profiles exists, checks each profile separately.
+ * A drive "meets" if it matches at least one profile.
+ *
+ * Returns: { meets, matchedProfiles, issues }
+ */
 export function checkRequirements(report, config) {
-  const req = config?.requirements;
+  const profiles = config?.profiles;
+
+  // Profile mode: check each named profile
+  if (profiles && profiles.length > 0) {
+    const matchedProfiles = [];
+    const allIssues = [];
+
+    for (const profile of profiles) {
+      const result = checkAgainstReq(report, profile);
+      if (result.meets) {
+        matchedProfiles.push(profile.name || 'unnamed');
+      } else {
+        allIssues.push(`${profile.name || 'unnamed'}: ${result.issues.join(', ')}`);
+      }
+    }
+
+    return {
+      meets: matchedProfiles.length > 0,
+      matchedProfiles,
+      issues: matchedProfiles.length > 0 ? [] : allIssues,
+    };
+  }
+
+  // Legacy mode: single requirements block
+  const result = checkAgainstReq(report, config?.requirements);
+  return { meets: result.meets, matchedProfiles: [], issues: result.issues };
+}
+
+function checkAgainstReq(report, req) {
   if (!req) return { meets: true, issues: [] };
 
   const h = report.health || {};
@@ -100,6 +135,12 @@ export function checkRequirements(report, config) {
     const capacityGb = d.capacity_bytes / (1000 * 1000 * 1000);
     if (capacityGb < req.min_capacity_gb) {
       issues.push(`capacity ${capacityGb.toFixed(0)}GB < ${req.min_capacity_gb}GB min`);
+    }
+  }
+  if (req.max_capacity_gb && d.capacity_bytes) {
+    const capacityGb = d.capacity_bytes / (1000 * 1000 * 1000);
+    if (capacityGb > req.max_capacity_gb) {
+      issues.push(`capacity ${capacityGb.toFixed(0)}GB > ${req.max_capacity_gb}GB max`);
     }
   }
   if (req.max_power_on_hours != null && (h.power_on_hours || 0) > req.max_power_on_hours) {

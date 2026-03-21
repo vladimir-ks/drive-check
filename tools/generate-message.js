@@ -156,48 +156,21 @@ async function main() {
 }
 
 function buildMessage(lang, token, seller) {
-  const greeting = seller
-    ? (lang === 'es' ? `¡Hola${seller ? ' ' + seller : ''}!` : `Hi${seller ? ' ' + seller : ''}!`)
-    : (lang === 'es' ? '¡Hola!' : 'Hi!');
+  const hi = seller ? `\u00A1Hola ${seller}!` : '\u00A1Hola!';
 
   const messages = {
-    en: `${greeting} I'm interested in your drive.
+    en: `Hi${seller ? ' ' + seller : ''}! Interested in your drive. Could you run this quick health check? (2 min, open-source, read-only)
 
-Could you tell me a bit about its history?
-- What kind of system was it in?
-- Roughly how was the system used — always on, or turned on/off?
-- Where was the system kept?
-- Was the system ever relocated or moved around?
-- Any reason in particular you're letting it go?
+npx drive-check ${token}
 
-I'd also appreciate a quick health check if possible (2 minutes):
+Needs Node.js (nodejs.org). A CrystalDiskInfo screenshot works too. Thanks!`,
 
-  npx drive-check ${token}
+    es: `${hi} Me interesan tus discos. Para hacerte una oferta justa, necesito ver su estado de salud. Puedes hacerlo de dos formas:
 
-Open-source, read-only, shows you everything before sending:
-https://github.com/vladimir-ks/drive-check
+A: Envia capturas de CrystalDiskInfo de cada disco (gratis: crystalmark.info)
+B: Pega esto en una terminal y selecciona los discos que vendes: npx drive-check ${token}
 
-It requires Node.js (https://nodejs.org) — the tool will guide you
-through the rest. A CrystalDiskInfo screenshot also works. Thanks!`,
-
-    es: `${greeting} Me interesa tu disco.
-
-¿Podrías contarme un poco sobre su historia?
-- ¿En qué tipo de sistema estuvo?
-- ¿Cómo se usaba el sistema — siempre encendido, o se apagaba?
-- ¿Dónde se encontraba el sistema?
-- ¿Alguna vez se trasladó o se movió el equipo?
-- ¿Algún motivo en particular por el que lo vendes?
-
-También agradecería un diagnóstico rápido si es posible (2 minutos):
-
-  npx drive-check ${token}
-
-Código abierto, solo lectura, ves todo antes de enviar:
-https://github.com/vladimir-ks/drive-check
-
-Requiere Node.js (https://nodejs.org) — la herramienta te guía
-con el resto. Una captura de CrystalDiskInfo también sirve. ¡Gracias!`,
+Gracias!`,
   };
 
   return messages[lang] || messages.en;

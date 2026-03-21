@@ -347,14 +347,14 @@ function getAllDrives() {
         const dr = report.drives[i];
         const score = computeLifeScore(dr);
         const reqCheck = checkRequirements(dr, config);
-        drives.push({ entry, driveIndex: i, driveReport: dr, score, meetsReq: reqCheck.meets, reqIssues: reqCheck.issues });
+        drives.push({ entry, driveIndex: i, driveReport: dr, score, meetsReq: reqCheck.meets, matchedProfiles: reqCheck.matchedProfiles || [], reqIssues: reqCheck.issues });
       }
     } else {
       // Single drive (v1.1): wrap in same shape
       const dr = { drive: report.drive, health: report.health, self_tests: report.self_tests, error_log_count: report.error_log_count, verdict: report.verdict };
       const score = computeLifeScore(report);
       const reqCheck = checkRequirements(report, config);
-      drives.push({ entry, driveIndex: 0, driveReport: dr, score, meetsReq: reqCheck.meets, reqIssues: reqCheck.issues });
+      drives.push({ entry, driveIndex: 0, driveReport: dr, score, meetsReq: reqCheck.meets, matchedProfiles: reqCheck.matchedProfiles || [], reqIssues: reqCheck.issues });
     }
   }
 
@@ -473,10 +473,11 @@ async function cmdInbox() {
   const isQuiet = args.includes('--quiet');
   const config = loadConfig();
   const ledger = loadLedger();
-  const pending = ledger.filter(e => e.status === 'pending');
+  // Check both pending AND received tokens (seller may re-run with more drives)
+  const checkable = ledger.filter(e => e.status === 'pending' || e.status === 'received');
 
-  if (pending.length === 0) {
-    if (!isQuiet) console.log('\n  No pending checks. Use "drive-buy send <url> <name>" first.\n');
+  if (checkable.length === 0) {
+    if (!isQuiet) console.log('\n  No checks to poll. Use "drive-buy send <url> <name>" first.\n');
     return;
   }
 
@@ -485,9 +486,9 @@ async function cmdInbox() {
   const active = [];
   let expiredCount = 0;
 
-  for (const entry of pending) {
+  for (const entry of checkable) {
     if (isTokenExpired(entry)) {
-      entry.status = 'expired';
+      if (entry.status === 'pending') entry.status = 'expired';
       expiredCount++;
     } else {
       active.push(entry);
@@ -511,86 +512,46 @@ async function cmdInbox() {
     if (!isQuiet) process.stdout.write(`  ${entry.seller || entry.token.slice(0, 20)}... `);
 
     try {
-      const reportData = await fetchReport(entry);
+      // Fetch ALL reports from this token, deduplicate by serial
+      const reportData = await fetchAllDrives(entry);
 
-      if (reportData) {
-        // Save full report
+      if (reportData && reportData.drives?.length > 0) {
+        // Save combined deduplicated report
         const reportPath = join(REPORTS_DIR, `${entry.token}.json`);
         writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
 
-        // Handle multi-drive (v1.2) and single-drive (v1.1)
+        // Update ledger
         entry.status = 'received';
         entry.received_at = new Date().toISOString();
-        let entryMeetsReq = false;
+        entry.drive_count = reportData.drive_count;
+        entry.drive_model = reportData.drives.map(d => d.drive?.model).join(', ');
+        entry.verdict = reportData.drives.map(d => d.verdict?.overall).join(', ');
 
-        if (reportData.version === '1.2' && reportData.drives) {
-          // Multi-drive report
-          entry.multi_drive = true;
-          entry.drive_count = reportData.drive_count;
-          const verdicts = reportData.drives.map(d => d.verdict?.overall);
-          entry.verdict = verdicts.join(', ');
-          entry.drive_model = reportData.drives.map(d => d.drive?.model).join(', ');
+        const allReqChecks = reportData.drives.map(d => checkRequirements(d, config));
+        const entryMeetsReq = allReqChecks.some(r => r.meets);
+        entry.meets_requirements = entryMeetsReq;
 
-          const allReqChecks = reportData.drives.map(d => checkRequirements(d, config));
-          entryMeetsReq = allReqChecks.some(r => r.meets);
-          entry.meets_requirements = entryMeetsReq;
-
-          if (!isQuiet) {
-            console.log(`RECEIVED \u2014 ${entry.drive_count} drives from ${entry.seller || 'seller'}:`);
-            for (let di = 0; di < reportData.drives.length; di++) {
-              const d = reportData.drives[di];
-              const reqTag = allReqChecks[di].meets ? '\x1b[32mMATCH\x1b[0m' : '\x1b[33mFAIL\x1b[0m';
-              console.log(`  ${d.drive?.model || '?'} \u2014 ${d.verdict?.overall} \u2014 ${reqTag}`);
-            }
+        if (!isQuiet) {
+          console.log(`RECEIVED \u2014 ${reportData.drive_count} drive(s) from ${entry.seller || 'seller'}:`);
+          for (let di = 0; di < reportData.drives.length; di++) {
+            const d = reportData.drives[di];
+            const profiles = allReqChecks[di].matchedProfiles || [];
+            const reqTag = allReqChecks[di].meets
+              ? `\x1b[32m${profiles.length ? profiles.join(', ') : 'MATCH'}\x1b[0m`
+              : '\x1b[33mFAIL\x1b[0m';
+            console.log(`  ${d.drive?.model || '?'} (${d.drive?.serial?.slice(-8) || '?'}) \u2014 ${d.verdict?.overall} \u2014 ${reqTag}`);
           }
-          received += reportData.drive_count;
-        } else {
-          // Single-drive report
-          const reqCheck = checkRequirements(reportData, config);
-          entry.verdict = reportData.verdict?.overall ?? '?';
-          entry.drive_model = reportData.drive?.model ?? '?';
-          entry.drive_serial = reportData.drive?.serial ?? '?';
-          entry.power_on_hours = reportData.health?.power_on_hours ?? 0;
-          entryMeetsReq = reqCheck.meets;
-          entry.meets_requirements = reqCheck.meets;
-          if (!reqCheck.meets) entry.requirement_issues = reqCheck.issues;
-
-          if (!isQuiet) {
-            const reqTag = reqCheck.meets
-              ? '\x1b[32mMEETS REQ\x1b[0m'
-              : '\x1b[33mFAILS REQ\x1b[0m';
-            console.log(`RECEIVED \u2014 ${entry.verdict} \u2014 ${entry.drive_model} \u2014 ${reqTag}`);
-            if (!reqCheck.meets) {
-              console.log(`           Issues: ${reqCheck.issues.join(', ')}`);
-            }
-          }
-          received++;
         }
+        received += reportData.drive_count;
 
-        // macOS notification (sanitize inputs to prevent shell injection)
+        // macOS notification
         if (process.platform === 'darwin') {
-          const ntfTitle = entryMeetsReq ? 'MATCH' : (entry.verdict || '?');
-          const ntfBody = `${(entry.drive_model || '?')} from ${entry.seller || 'seller'}`;
+          const ntfTitle = entryMeetsReq ? 'MATCH' : 'NEW';
+          const ntfBody = `${reportData.drive_count} drive(s) from ${entry.seller || 'seller'}`;
           try {
             execFileSync('osascript', ['-e',
               `display notification "${ntfBody.replace(/["\\]/g, '')}" with title "drive-buy: ${ntfTitle.replace(/["\\]/g, '')}"`]);
-          } catch { /* notification is best-effort */ }
-        }
-
-        // Custom notify command from config
-        if (config.polling?.notify_command) {
-          try {
-            execFileSync('/bin/sh', ['-c', config.polling.notify_command], {
-              env: {
-                ...process.env,
-                DRIVE_MODEL: entry.drive_model || '',
-                SELLER: entry.seller || '',
-                VERDICT: entry.verdict || '',
-                MEETS_REQ: String(entryMeetsReq),
-              },
-              timeout: 10000,
-            });
-          } catch { /* custom notification is best-effort */ }
+          } catch { /* best-effort */ }
         }
       } else {
         if (!isQuiet) console.log('no report yet');
@@ -738,14 +699,16 @@ function cmdBest() {
   console.log('\n  === DRIVE RANKING (best first) ===\n');
 
   drives.forEach((item, rank) => {
-    const { entry, driveReport, score, meetsReq, reqIssues } = item;
+    const { entry, driveReport, score, meetsReq, matchedProfiles, reqIssues } = item;
     const h = driveReport.health || {};
     const verdict = driveReport.verdict?.overall;
 
     const verdictColor = verdict === 'HEALTHY' ? '\x1b[32m' : verdict === 'WARNING' ? '\x1b[33m' : '\x1b[31m';
-    const reqTag = meetsReq ? '\x1b[32m[MATCH]\x1b[0m' : '\x1b[31m[FAIL]\x1b[0m';
+    const profileTag = matchedProfiles?.length > 0
+      ? `\x1b[32m[${matchedProfiles.join(', ')}]\x1b[0m`
+      : meetsReq ? '\x1b[32m[MATCH]\x1b[0m' : '\x1b[31m[FAIL]\x1b[0m';
 
-    console.log(`  ${rank + 1}. ${driveReport.drive?.model} (${entry.seller || 'unnamed'}) ${reqTag}`);
+    console.log(`  ${rank + 1}. ${driveReport.drive?.model} (${entry.seller || 'unnamed'}) ${profileTag}`);
     console.log(`     ${verdictColor}${verdict}\x1b[0m | Score: ${score.total}% | Est. remaining: ${score.years_remaining} years`);
     console.log(`     Hours: ${fmtNum(h.power_on_hours)} | Cycles: ${fmtNum(h.load_cycles || 0)} | Pending: ${h.pending_sectors || 0} | Temp: ${h.temperature_c}C`);
     console.log(`     ${score.breakdown}`);
@@ -1026,7 +989,12 @@ function cmdPollStatus() {
 // ============================================================================
 // NETWORK — fetch report with retry + HTML guard
 // ============================================================================
-async function fetchReport(entry) {
+/**
+ * Fetch ALL reports from a token's ntfy topic, extract individual drives,
+ * deduplicate by serial number (latest data wins).
+ * Returns: { drives: [...], seller_responses, token, generated_at } or null
+ */
+async function fetchAllDrives(entry) {
   const doFetch = async (url, opts, retries = 1) => {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
@@ -1053,24 +1021,65 @@ async function fetchReport(entry) {
     try { return JSON.parse(l); } catch { return null; }
   }).filter(Boolean);
 
-  const reports = messages.filter(m => {
-    if (!m.message && !m.attachment) return false;
+  // Extract report data from ALL matching messages
+  const allReports = [];
+  for (const m of messages) {
+    if (!m.message && !m.attachment) continue;
+    let reportData = null;
     try {
-      const data = m.message ? JSON.parse(m.message) : null;
-      return (data?.version === '1.1' && data?.drive) || (data?.version === '1.2' && data?.drives);
-    } catch {
-      return !!m.attachment;
-    }
-  });
-
-  if (reports.length === 0) return null;
-
-  const msg = reports[reports.length - 1]; // latest
-  if (msg.attachment?.url) {
-    const dlRes = await doFetch(msg.attachment.url, { signal: AbortSignal.timeout(15000) });
-    return await dlRes.json();
+      if (m.attachment?.url) {
+        const dlRes = await doFetch(m.attachment.url, { signal: AbortSignal.timeout(15000) });
+        reportData = await dlRes.json();
+      } else if (m.message) {
+        const data = JSON.parse(m.message);
+        if ((data?.version === '1.1' && data?.drive) || (data?.version === '1.2' && data?.drives)) {
+          reportData = data;
+        }
+      }
+    } catch { /* skip malformed messages */ }
+    if (reportData) allReports.push(reportData);
   }
-  return JSON.parse(msg.message);
+
+  if (allReports.length === 0) return null;
+
+  // Extract individual drives from all reports, deduplicate by serial
+  const drivesBySerial = new Map();
+  let latestSellerResponses = null;
+
+  for (const report of allReports) {
+    // Collect seller responses from latest report that has them
+    if (report.seller_responses) latestSellerResponses = report.seller_responses;
+
+    if (report.version === '1.2' && report.drives) {
+      for (const d of report.drives) {
+        const serial = d.drive?.serial || `unknown-${Math.random()}`;
+        drivesBySerial.set(serial, d);
+      }
+    } else if (report.drive) {
+      const serial = report.drive?.serial || `unknown-${Math.random()}`;
+      drivesBySerial.set(serial, {
+        drive: report.drive,
+        health: report.health,
+        self_tests: report.self_tests,
+        error_log_count: report.error_log_count,
+        verdict: report.verdict,
+        integrity: report.integrity,
+      });
+    }
+  }
+
+  const drives = [...drivesBySerial.values()];
+
+  // Return as a unified v1.2 report
+  return {
+    version: '1.2',
+    token: entry.token,
+    generated_at: allReports[allReports.length - 1].generated_at,
+    tool_version: allReports[allReports.length - 1].tool_version,
+    drive_count: drives.length,
+    drives,
+    seller_responses: latestSellerResponses,
+  };
 }
 
 // ============================================================================
